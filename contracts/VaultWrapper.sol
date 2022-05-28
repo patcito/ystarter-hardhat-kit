@@ -4,8 +4,7 @@ pragma solidity ^0.8.12;
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {VaultAPI} from "./../lib/yearn-vaults/contracts/BaseStrategy.sol";
-
+import {VaultAPI} from "../lib/yearn-vaults/contracts/BaseStrategy.sol";
 import "./interfaces/IERC4626.sol";
 import "./interfaces/IVaultWrapper.sol";
 
@@ -122,7 +121,12 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         override
         returns (uint256)
     {
-        return (assets * (10**_decimals)) / yVault.pricePerShare();
+        uint256 shares = (assets * (10**_decimals)) / yVault.pricePerShare();
+        uint256 vaultShares = yVault.balanceOf(address(this));
+        if (totalSupply() == 0) {
+            return shares;
+        }
+        return (shares * totalSupply()) / vaultShares;
     }
 
     function convertToAssets(uint256 shares)
@@ -131,7 +135,12 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         override
         returns (uint256)
     {
-        return (shares * yVault.pricePerShare()) / (10**_decimals);
+        uint256 amount = (shares * yVault.pricePerShare()) / (10**_decimals);
+        uint256 vaultShares = yVault.balanceOf(address(this));
+
+        return
+            (((amount * vaultShares) / totalSupply()) *
+                10**uint256(yVault.decimals())) / yVault.pricePerShare();
     }
 
     function previewDeposit(uint256 assets)
@@ -149,7 +158,7 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         override
         returns (uint256)
     {
-        return (shares * yVault.pricePerShare()) / (10**_decimals);
+        return convertToAssets(shares);
     }
 
     function previewWithdraw(uint256 assets)
@@ -158,7 +167,7 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         override
         returns (uint256)
     {
-        return (assets * (10**_decimals)) / yVault.pricePerShare();
+        return convertToShares(assets);
     }
 
     function previewRedeem(uint256 shares)
@@ -167,7 +176,7 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         override
         returns (uint256)
     {
-        return (shares * yVault.pricePerShare()) / (10**_decimals);
+        return convertToAssets(shares);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -210,7 +219,7 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         return this.balanceOf(owner);
     }
 
-     function _deposit(
+    function _deposit(
         uint256 amount, // if `MAX_UINT256`, just deposit everything
         address receiver,
         address depositor
@@ -245,8 +254,9 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
         uint256 afterBal = _token.balanceOf(address(this));
         deposited = beforeBal - afterBal;
 
+        uint256 proportionalShares = convertToShares(amount);
         // afterDeposit custom logic
-        _mint(receiver, mintedShares);
+        _mint(receiver, proportionalShares);
 
         // `receiver` now has shares of `_vault` as balance, converted to `token` here
         // Issue a refund if not everything was deposited
@@ -271,8 +281,7 @@ contract VaultWrapper is ERC20, IVaultWrapper, IERC4626 {
 
         if (availableShares == 0) revert NoAvailableShares();
 
-        uint256 estimatedMaxShares = (amount * 10**uint256(_vault.decimals())) /
-            _vault.pricePerShare();
+        uint256 estimatedMaxShares = convertToShares(amount);
 
         if (estimatedMaxShares > availableShares)
             revert NotEnoughAvailableSharesForAmount();
